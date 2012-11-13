@@ -57,10 +57,11 @@ sub read_config {
 
 ### Fetch a logfile to process
 ###   fetch_logfile(logfile_id, logfile_uri)
+###   returns temporary filename (or undef on failure)
 
 sub fetch_logfile($$) {
     my $uri=URI->new($_[1]);
-    my $logfile="$tmpdir/id$_[0]".$uri->host.'-'.basename($uri->path);
+    my $logfile="$tmpdir/id$_[0]-".basename($uri->path);
 
     if($uri->scheme eq 'ssh') {
         system('scp '.$uri->user.'@'.$uri->host.':'.$uri->path.' '.$logfile);
@@ -68,21 +69,21 @@ sub fetch_logfile($$) {
         system('cp '.$uri->path.' '.$logfile);
     } else {
         warn "unknown URI sceme for $_[1]";
-        return 0;
+        return undef;
     }
 
     if(! -r $logfile) {
         warn "failed to fetch $_[1]";
-        return 0;
+        return undef;
     }
 
     my @st=stat($logfile);
     if(time()-$st[9] > 2) {  
         warn "failed to fetch $_[1] ($logfile is more than 2 seconds old)";
-        return 0;
+        return undef;
     }
 
-    return 1;
+    return $logfile;
 }
 
 
@@ -108,7 +109,8 @@ die 'no logfiles defined' if(scalar(keys(%$logfiles))==0);
 die 'no metrics defined' if(scalar(keys(%$metrics))==0);
 
 foreach my $logfile (keys %$logfiles) {
-    next if(!fetch_logfile($logfiles->{$logfile}{'id'}, $logfiles->{$logfile}{'uri'}));
+    my $file=fetch_logfile($logfiles->{$logfile}{'id'}, $logfiles->{$logfile}{'uri'});
+    next if(!$file);
 
     $dbh->do('update logfiles set last_retrieved=now() where id='.$logfiles->{$logfile}{'id'});
 
@@ -117,7 +119,11 @@ foreach my $logfile (keys %$logfiles) {
         my $cmd=$metrics->{$metric}{'cmd'};
         if($metrics->{$metric}{'do_subs'}) {
             $cmd=~s/\$TIMESTAMP\$/$logfiles->{$logfile}{'ts'}/;
+            $cmd=~s/\$LOGFILE\$/$file/;
+        } else {
+            $cmd.=" $file";
         }
+
         print "RUNNING: $cmd\n";
         if(!open CMD, "$cmd|") {
             warn $logfiles->{$logfile}{'uri'}.": failed to run $cmd";
@@ -125,6 +131,7 @@ foreach my $logfile (keys %$logfiles) {
         }
         $result=<CMD>;
         close CMD;
+        chomp $result;
 
         if(!$result) {
             warn $logfiles->{$logfile}{'uri'}.": result of \"$cmd\" is empty";
