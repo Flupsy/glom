@@ -13,8 +13,8 @@ create table metrics (
     id              int auto_increment primary key,
     name            text,
     cmd             text not null,
-    tail            boolean,
-    do_subs         boolean,
+    tail            boolean default false,
+    do_subs         boolean defalt true
 );
 
 create table results (
