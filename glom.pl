@@ -102,7 +102,7 @@ my $dbh=DBI->connect('DBI:mysql:database='.$conf{'glom.dbname'}.";host=$dbhost;p
     $conf{'glom.dbuser'}, $conf{'glom.dbpass'}, {'RaiseError' => 1});
 
 my $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'id');
-my $metrics=$dbh->selectall_hashref('select id,cmd from metrics', 'id');
+my $metrics=$dbh->selectall_hashref('select * from metrics', 'id');
 
 die 'no logfiles defined' if(scalar(keys(%$logfiles))==0);
 die 'no metrics defined' if(scalar(keys(%$metrics))==0);
@@ -114,14 +114,24 @@ foreach my $logfile (keys %$logfiles) {
 
     my $result;
     foreach my $metric (keys %$metrics) {
-        print "RUNNING: $metrics->{$metric}{'cmd'}\n";
-        if(!open CMD, $metrics->{$metric}{'cmd'}.'|') {
-            warn "failed to run ".$metrics->{$metric}{'cmd'};
+        my $cmd=$metrics->{$metric}{'cmd'};
+        if($metrics->{$metric}{'do_subs'}) {
+            $cmd=~s/\$TIMESTAMP\$/$logfiles->{$logfile}{'ts'}/;
+        }
+        print "RUNNING: $cmd\n";
+        if(!open CMD, "$cmd|") {
+            warn $logfiles->{$logfile}{'uri'}.": failed to run $cmd";
             next;
         }
         $result=<CMD>;
         close CMD;
-        print "RESULT: $result\n";
+
+        if(!$result) {
+            warn $logfiles->{$logfile}{'uri'}.": result of \"$cmd\" is empty";
+            next;
+        }
+
+        print "RESULT: $result\n.\n";
 
         (my $count)=$dbh->selectrow_array('select count(*) from results where '.
             'log_id='.$logfiles->{$logfile}{'id'}.' and met_id='.$metrics->{$metric}{'id'});

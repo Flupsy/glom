@@ -12,7 +12,9 @@ create table logfiles (
 create table metrics (
     id              int auto_increment primary key,
     name            text,
-    cmd             text not null
+    cmd             text not null,
+    tail            boolean,
+    do_subs         boolean,
 );
 
 create table results (
