@@ -5,7 +5,7 @@ use glom;
 create table logfiles (
     id              int auto_increment primary key,
     name            text,
-    uri             text not null,
+    uri             varchar(512) unique not null,
     last_retrieved  timestamp default current_timestamp
 );
 
@@ -18,8 +18,8 @@ create table metrics (
 );
 
 create table results (
-    log_id          int,
-    met_id          int,
+    log_id          int not null,
+    met_id          int not null,
     value           text,
     last_updated    timestamp default current_timestamp
 );
