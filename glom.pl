@@ -3,7 +3,7 @@
 #
 
 use Getopt::Std;
-use Config::Simple;
+use Config::IniFiles;
 use DBI;
 use URI;
 use File::Basename;
@@ -43,15 +43,16 @@ sub read_config {
         }
     }
 
-    Config::Simple->import_from($config_file, \%conf);
+    tie %conf, 'Config::IniFiles', (-file => $config_file);
+    die "no [glom] section in $config_file" if(!defined($conf{'glom'}));
 
-    if(defined $conf{'glom.logrep'}) { $logrep=$conf{'glom.logrep'}; }
-    if(defined $conf{'glom.dbhost'}) { $dbhost=$conf{'glom.dbhost'}; }
-    if(defined $conf{'glom.dbport'}) { $dbport=$conf{'glom.dbport'}; }
-    if(defined $conf{'glom.tmpdir'}) { $tmpdir=$conf{'glom.tmpdir'}; }
+    if(defined $conf{'glom'}{'logrep'}) { $logrep=$conf{'glom'}{'logrep'}; }
+    if(defined $conf{'glom'}{'dbhost'}) { $dbhost=$conf{'glom'}{'dbhost'}; }
+    if(defined $conf{'glom'}{'dbport'}) { $dbport=$conf{'glom'}{'dbport'}; }
+    if(defined $conf{'glom'}{'tmpdir'}) { $tmpdir=$conf{'glom'}{'tmpdir'}; }
 
     die "one or more of dbuser, dbpass or dbname not defined in $config_file"
-        if(!defined($conf{'glom.dbuser'}) || !defined($conf{'glom.dbpass'}) || !defined($conf{'glom.dbname'}));
+        if(!defined($conf{'glom'}{'dbuser'}) || !defined($conf{'glom'}{'dbpass'}) || !defined($conf{'glom'}{'dbname'}));
 }
 
 
@@ -99,11 +100,20 @@ if(! -d $tmpdir) {
     die "can't mkdir $tmpdir: $!" unless mkdir($tmpdir);
 }
 
-my $dbh=DBI->connect('DBI:mysql:database='.$conf{'glom.dbname'}.";host=$dbhost;port=$dbport",
-    $conf{'glom.dbuser'}, $conf{'glom.dbpass'}, {'RaiseError' => 1});
+my $dbh=DBI->connect('DBI:mysql:database='.$conf{'glom'}{'dbname'}.";host=$dbhost;port=$dbport",
+    $conf{'glom'}{'dbuser'}, $conf{'glom'}{'dbpass'}, {'RaiseError' => 1});
 
-my $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'id');
+my $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'uri');
 my $metrics=$dbh->selectall_hashref('select * from metrics', 'id');
+
+if(defined($conf{'logfiles'})) {
+    foreach my $new (keys %{$conf{'logfiles'}}) {
+        if(!defined($logfiles->{$conf{'logfiles'}{$new}})) {
+            $dbh->do("insert into logfiles (name,uri) values ('$new','$conf{'logfiles'}{$new}')");
+        }
+    }
+    $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'uri');
+}
 
 die 'no logfiles defined' if(scalar(keys(%$logfiles))==0);
 die 'no metrics defined' if(scalar(keys(%$metrics))==0);
