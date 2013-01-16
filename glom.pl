@@ -6,6 +6,7 @@ use Getopt::Std;
 use Config::IniFiles;
 use DBI;
 use URI;
+use Sys::Hostname;
 use File::Basename;
 use Data::Dumper;
 
@@ -20,6 +21,7 @@ my $logrep='/usr/bin/logrep';
 my $dbhost='localhost';
 my $dbport=3306;
 my $tmpdir='/var/tmp/glom';
+my $logfile_spec='/data/vhost/*/logs/access_log';
 
 ### Globals
 
@@ -50,41 +52,10 @@ sub read_config {
     if(defined $conf{'glom'}{'dbhost'}) { $dbhost=$conf{'glom'}{'dbhost'}; }
     if(defined $conf{'glom'}{'dbport'}) { $dbport=$conf{'glom'}{'dbport'}; }
     if(defined $conf{'glom'}{'tmpdir'}) { $tmpdir=$conf{'glom'}{'tmpdir'}; }
+    if(defined $conf{'glom'}{'logfile_spec'}) { $logfile_spec=$conf{'glom'}{'logfile_spec'}; }
 
     die "one or more of dbuser, dbpass or dbname not defined in $config_file"
         if(!defined($conf{'glom'}{'dbuser'}) || !defined($conf{'glom'}{'dbpass'}) || !defined($conf{'glom'}{'dbname'}));
-}
-
-
-### Fetch a logfile to process
-###   fetch_logfile(logfile_id, logfile_uri)
-###   returns temporary filename (or undef on failure)
-
-sub fetch_logfile($$) {
-    my $uri=URI->new($_[1]);
-    my $logfile="$tmpdir/id$_[0]-".basename($uri->path);
-
-    if($uri->scheme eq 'ssh') {
-        system('scp '.$uri->user.'@'.$uri->host.':'.$uri->path.' '.$logfile);
-    } elsif($uri->scheme eq 'file') {
-        system('cp '.$uri->path.' '.$logfile);
-    } else {
-        warn "unknown URI sceme for $_[1]";
-        return undef;
-    }
-
-    if(! -r $logfile) {
-        warn "failed to fetch $_[1]";
-        return undef;
-    }
-
-    my @st=stat($logfile);
-    if(time()-$st[9] > 2) {  
-        warn "failed to fetch $_[1] ($logfile is more than 2 seconds old)";
-        return undef;
-    }
-
-    return $logfile;
 }
 
 
@@ -103,62 +74,40 @@ if(! -d $tmpdir) {
 my $dbh=DBI->connect('DBI:mysql:database='.$conf{'glom'}{'dbname'}.";host=$dbhost;port=$dbport",
     $conf{'glom'}{'dbuser'}, $conf{'glom'}{'dbpass'}, {'RaiseError' => 1});
 
-my $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'uri');
 my $metrics=$dbh->selectall_hashref('select * from metrics', 'id');
 
-if(defined($conf{'logfiles'})) {
-    foreach my $new (keys %{$conf{'logfiles'}}) {
-        if(!defined($logfiles->{$conf{'logfiles'}{$new}})) {
-            $dbh->do("insert into logfiles (name,uri) values ('$new','$conf{'logfiles'}{$new}')");
-        }
-    }
-    $logfiles=$dbh->selectall_hashref('select id,uri,unix_timestamp(last_retrieved) as ts from logfiles', 'uri');
-}
-
-die 'no logfiles defined' if(scalar(keys(%$logfiles))==0);
 die 'no metrics defined' if(scalar(keys(%$metrics))==0);
 
-foreach my $logfile (keys %$logfiles) {
-    my $file=fetch_logfile($logfiles->{$logfile}{'id'}, $logfiles->{$logfile}{'uri'});
-    next if(!$file);
-
-    $dbh->do('update logfiles set last_retrieved=now() where id='.$logfiles->{$logfile}{'id'});
+foreach my $file (glob $logfile_spec) {
+    my $logfile=$dbh->selectrow_hashref("select id,filename,unix_timestamp(last_retrieved) as ts from logfiles where filename='$file'");
+    if(!$logfile) {
+        $dbh->do("insert into logfiles (filename) values ('$file')");
+        $logfile=$dbh->selectrow_hashref("select id,filename,unix_timestamp(last_retrieved) as ts from logfiles where filename='$file'");
+    } else {
+        $dbh->do("update logfiles set last_retrieved=now() where id='$$logfile{'id'}'");
+    }
 
     my $result;
     foreach my $metric (keys %$metrics) {
         my $cmd=$metrics->{$metric}{'cmd'};
         if($metrics->{$metric}{'do_subs'}) {
-            $cmd=~s/\$TIMESTAMP\$/$logfiles->{$logfile}{'ts'}/;
+            $cmd=~s/\$TIMESTAMP\$/$$logfile{'ts'}/;
             $cmd=~s/\$LOGFILE\$/$file/;
         } else {
             $cmd.=" $file";
         }
 
-        print "RUNNING: $cmd\n";
-        if(!open CMD, "$cmd|") {
-            warn $logfiles->{$logfile}{'uri'}.": failed to run $cmd";
+        if(!open CMD, "$cmd 2>/dev/null |") {
+            warn "$file: failed to run $cmd";
             next;
         }
         $result=<CMD>;
         close CMD;
+
+        next if(!$result);
+
         chomp $result;
-
-        if(!$result) {
-            warn $logfiles->{$logfile}{'uri'}.": result of \"$cmd\" is empty";
-            next;
-        }
-
-        print "RESULT: $result\n.\n";
-
-        (my $count)=$dbh->selectrow_array('select count(*) from results where '.
-            'log_id='.$logfiles->{$logfile}{'id'}.' and met_id='.$metrics->{$metric}{'id'});
-
-        if($count==0) {
-            $dbh->do('insert into results (log_id,met_id,value,last_updated) values ('.
-                $logfiles->{$logfile}{'id'}.','.$metrics->{$metric}{'id'}.",'$result',now())");
-        } else {
-            $dbh->do("update results set value='$result',last_updated=now() where ".
-                'log_id='.$logfiles->{$logfile}{'id'}.' and met_id='.$metrics->{$metric}{'id'});
-        }
+        $dbh->do("replace into results (log_id,met_id,value,last_updated) values (".
+            "$$logfile{'id'},$metrics->{$metric}{'id'},'$result',now())");
     }
 }
