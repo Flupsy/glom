@@ -14,7 +14,7 @@ create table metrics (
     name            text,
     cmd             text not null,
     tail            boolean default false,
-    do_subs         boolean defalt true
+    do_subs         boolean default true
 );
 
 create table results (
