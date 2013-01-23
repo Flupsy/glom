@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 #
 # glom: a webserver log aggregator and statistics generator
 #
@@ -20,6 +21,7 @@ my $config_file=$ENV{'HOME'}.'/.glom';
 my $logrep='/usr/bin/logrep';
 my $dbhost='localhost';
 my $dbport=3306;
+my $interval=60;
 my $tmpdir='/var/tmp/glom';
 my $logfile_spec='/data/vhost/*/logs/access_log';
 
@@ -53,6 +55,7 @@ sub read_config {
     if(defined $conf{'glom'}{'dbport'}) { $dbport=$conf{'glom'}{'dbport'}; }
     if(defined $conf{'glom'}{'tmpdir'}) { $tmpdir=$conf{'glom'}{'tmpdir'}; }
     if(defined $conf{'glom'}{'logfile_spec'}) { $logfile_spec=$conf{'glom'}{'logfile_spec'}; }
+    if(defined $conf{'glom'}{'interval'}) { $interval=$conf{'glom'}{'interval'}; }
 
     die "one or more of dbuser, dbpass or dbname not defined in $config_file"
         if(!defined($conf{'glom'}{'dbuser'}) || !defined($conf{'glom'}{'dbpass'}) || !defined($conf{'glom'}{'dbname'}));
@@ -91,7 +94,10 @@ foreach my $file (glob $logfile_spec) {
     foreach my $metric (keys %$metrics) {
         my $cmd=$metrics->{$metric}{'cmd'};
         if($metrics->{$metric}{'do_subs'}) {
+            my $last_glom_run=time()-$interval;
+
             $cmd=~s/\$TIMESTAMP\$/$$logfile{'ts'}/;
+            $cmd=~s/\$LAST_GLOM_RUN\$/$last_glom_run/;
             $cmd=~s/\$LOGFILE\$/$file/;
         } else {
             $cmd.=" $file";
